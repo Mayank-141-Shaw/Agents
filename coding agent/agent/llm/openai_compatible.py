@@ -1,15 +1,18 @@
+import json
 import httpx
 from typing import List, Dict, Any, Optional
+from agent.config import get_config
 from agent.llm.base import BaseLLMProvider, Message, LLMResponse, ToolCallRequest
 from agent.llm.parser import parse_tool_calls_from_text
 
 class OpenAICompatibleProvider(BaseLLMProvider):
     """Client for OpenAI and OpenAI-compatible endpoints (LM Studio, vLLM, DeepSeek, Groq)."""
 
-    def __init__(self, api_key: Optional[str] = None, base_url: str = "https://api.openai.com/v1", model: str = "gpt-4o"):
-        self.api_key = api_key or "sk-no-key-required"
-        self.base_url = base_url.rstrip("/")
-        self.model = model
+    def __init__(self, api_key: Optional[str] = None, base_url: Optional[str] = None, model: Optional[str] = None):
+        cfg = get_config()
+        self.api_key = api_key or cfg.openai_api_key or "sk-no-key-required"
+        self.base_url = (base_url or cfg.openai_base_url or "https://api.openai.com/v1").rstrip("/")
+        self.model = model or cfg.model_name
 
     async def chat(
         self,
@@ -64,7 +67,6 @@ class OpenAICompatibleProvider(BaseLLMProvider):
         tool_calls: List[ToolCallRequest] = []
 
         if "tool_calls" in message_obj and message_obj["tool_calls"]:
-            import json
             for tc in message_obj["tool_calls"]:
                 fn = tc.get("function", {})
                 args_raw = fn.get("arguments", "{}")

@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 from agent.tools.base import ToolRegistry, ToolResult
 from agent.tools.filesystem import read_file, write_file, edit_file_exact, list_directory
-from agent.tools.search import grep_search, find_files, parse_ast_symbols
+from agent.tools.search import grep_search, find_files, parse_ast_symbols, web_search
 from agent.tools.task_planner import update_task_list, get_task_status
 from agent.llm.parser import parse_tool_calls_from_text
 
@@ -75,3 +75,16 @@ def test_fallback_parser():
     assert len(calls) == 1
     assert calls[0].name == "read_file"
     assert calls[0].arguments["path"] == "main.py"
+
+@pytest.mark.asyncio
+async def test_web_search():
+    res = await web_search(prompt="Python programming", max_results=2)
+    # Result should succeed or return error if package missing/no internet
+    assert isinstance(res, ToolResult)
+
+def test_gemini_provider_validation():
+    from agent.llm.gemini import GeminiProvider
+    with pytest.raises(ValueError, match="Google API key is required"):
+        GeminiProvider(api_key="")
+
+

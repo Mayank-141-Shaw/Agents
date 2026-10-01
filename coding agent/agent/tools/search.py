@@ -1,6 +1,7 @@
 import os
 import re
 import ast
+import asyncio
 from pathlib import Path
 from typing import Optional, List
 from agent.tools.base import default_registry, ToolResult
@@ -53,6 +54,52 @@ async def grep_search(query: str, directory: str = ".", file_pattern: Optional[s
         return ToolResult(success=True, output=output)
     except Exception as e:
         return ToolResult(success=False, output="", error=f"Grep search failed: {str(e)}")
+
+
+@default_registry.register(
+    name="web_search",
+    description="Search for a prompt or query on the web using DuckDuckGo.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "prompt": {"type": "string", "description": "Search prompt or query string"},
+            "max_results": {"type": "integer", "description": "Maximum number of search results to return (default 5)"}
+        },
+        "required": ["prompt"]
+    }
+)
+async def web_search(prompt: str, max_results: int = 5) -> ToolResult:
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        return ToolResult(
+            success=False,
+            output="",
+            error="duckduckgo_search package is not installed. Run 'pip install duckduckgo-search' to enable web search."
+        )
+
+    try:
+        def _fetch():
+            with DDGS() as ddgs:
+                return list(ddgs.text(prompt, max_results=max_results))
+
+        results = await asyncio.to_thread(_fetch)
+
+        if not results:
+            return ToolResult(success=True, output=f"No web search results found for prompt: '{prompt}'")
+
+        formatted = []
+        for idx, res in enumerate(results, 1):
+            title = res.get("title", "No Title")
+            href = res.get("href") or res.get("link", "")
+            body = res.get("body") or res.get("snippet", "")
+            formatted.append(f"{idx}. {title}\n   URL: {href}\n   Snippet: {body}")
+
+        output = f"Web Search Results for '{prompt}':\n\n" + "\n\n".join(formatted)
+        return ToolResult(success=True, output=output, data={"results": results})
+    except Exception as e:
+        return ToolResult(success=False, output="", error=f"Web search failed: {str(e)}")
+
 
 @default_registry.register(
     name="find_files",

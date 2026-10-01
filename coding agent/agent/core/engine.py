@@ -4,6 +4,7 @@ from agent.config import AgentConfig, get_config
 from agent.core.context import ContextManager
 from agent.core.logger import SessionLogger
 from agent.llm.base import BaseLLMProvider, LLMResponse
+from agent.llm.gemini import GeminiProvider
 from agent.llm.ollama import OllamaProvider
 from agent.llm.openai_compatible import OpenAICompatibleProvider
 from agent.tools.base import ToolRegistry, default_registry, ToolResult
@@ -20,7 +21,14 @@ class AgentEngine:
 
     def _init_provider(self) -> BaseLLMProvider:
         prov = self.config.provider.lower()
-        if prov == "ollama":
+        if prov == "gemini":
+            if not self.config.google_api_key:
+                raise ValueError("Google API key is missing. Please provide your Google API key to use the agent.")
+            return GeminiProvider(
+                api_key=self.config.google_api_key,
+                model=self.config.model_name
+            )
+        elif prov == "ollama":
             return OllamaProvider(
                 base_url=self.config.ollama_base_url,
                 model=self.config.model_name
