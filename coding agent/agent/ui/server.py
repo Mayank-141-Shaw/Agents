@@ -172,18 +172,25 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <p>Select your provider, model, and enter your API key. The key is stored purely in browser RAM (`sessionStorage`) and is <strong>never saved to disk</strong>.</p>
             <div style="display: flex; flex-direction: column; gap: 12px;">
                 <label style="font-size: 12px; color: #94a3b8;">Provider</label>
-                <select id="providerSelect" onchange="updateModelOptions()">
+                <select id="providerSelect">
                     <option value="gemini" selected>Google Gemini</option>
                     <option value="openai">OpenAI / Compatible API</option>
                     <option value="ollama">Local Ollama</option>
                 </select>
 
                 <label style="font-size: 12px; color: #94a3b8;">Model</label>
-                <select id="modelSelect"></select>
+                <select id="modelSelect">
+                    <option value="gemini-3.5-flash-lite" selected>Gemini 3.5 Flash Lite (Recommended)</option>
+                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                    <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</option>
+                    <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
+                    <option value="gemini-1.5-pro">Gemini 1.5 Pro</option>
+                    <option value="gemini-1.5-flash-8b">Gemini 1.5 Flash 8B</option>
+                </select>
 
                 <label style="font-size: 12px; color: #94a3b8;">API Key</label>
                 <input type="password" id="apiKeyInput" placeholder="Enter API Key (e.g. AIzaSy...)" />
-                <button onclick="submitApiKey()">Start Session</button>
+                <button type="button" id="startSessionBtn">Start Session</button>
             </div>
         </div>
     </div>
@@ -191,7 +198,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <header>
         <h2>⚡ Local Coding Agent Dashboard</h2>
         <div>
-            <button style="padding: 6px 12px; font-size: 12px; margin-right: 10px;" onclick="clearSessionKey()">Change Key & Model</button>
+            <button type="button" id="changeKeyBtn" style="padding: 6px 12px; font-size: 12px; margin-right: 10px;">Change Key & Model</button>
             <span class="status-tag" id="status">Disconnected</span>
         </div>
     </header>
@@ -200,8 +207,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="main-chat">
             <div id="messages"></div>
             <div class="input-box">
-                <input type="text" id="userInput" placeholder="Enter coding task or instruction..." onkeydown="if(event.key==='Enter') sendMessage()" />
-                <button onclick="sendMessage()">Send</button>
+                <input type="text" id="userInput" placeholder="Enter coding task or instruction..." />
+                <button type="button" id="sendMsgBtn">Send</button>
             </div>
         </div>
 
@@ -211,7 +218,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
     </div>
 
-    <script>
+    <script type="text/javascript">
         const MODEL_MAP = {
             "gemini": [
                 { id: "gemini-3.5-flash-lite", name: "Gemini 3.5 Flash Lite (Recommended)" },
@@ -239,26 +246,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         let sessionProvider = sessionStorage.getItem("session_provider") || "gemini";
         let sessionModel = sessionStorage.getItem("session_model") || "gemini-2.0-flash";
 
-        const messagesDiv = document.getElementById('messages');
-        const telemetryDiv = document.getElementById('telemetry');
-        const statusSpan = document.getElementById('status');
-        const keyModal = document.getElementById('keyModal');
-
-        window.addEventListener("DOMContentLoaded", () => {
-            const provSelect = document.getElementById('providerSelect');
-            if (provSelect) {
-                provSelect.value = sessionProvider;
-            }
-            updateModelOptions();
-
-            if (sessionApiKey || sessionProvider === "ollama") {
-                document.getElementById('apiKeyInput').value = sessionApiKey;
-                keyModal.style.display = "none";
-                initConnection();
-            } else {
-                keyModal.style.display = "flex";
-            }
-        });
+        const getMessagesDiv = () => document.getElementById('messages');
+        const getTelemetryDiv = () => document.getElementById('telemetry');
+        const getStatusSpan = () => document.getElementById('status');
 
         function updateModelOptions() {
             const provSelect = document.getElementById('providerSelect');
@@ -266,7 +256,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (!provSelect || !modelSelect) return;
 
             const prov = provSelect.value || sessionProvider || "gemini";
-            const models = MODEL_MAP[prov] || [];
+            const models = MODEL_MAP[prov] || MODEL_MAP["gemini"] || [];
 
             modelSelect.innerHTML = "";
             models.forEach(m => {
@@ -284,32 +274,40 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         function submitApiKey() {
-            const input = document.getElementById('apiKeyInput');
-            const provSelect = document.getElementById('providerSelect');
-            const modelSelect = document.getElementById('modelSelect');
-            
-            const key = input.value.trim();
-            const prov = provSelect.value;
-            const model = modelSelect.value;
-            
-            if (!key && prov !== "ollama") {
-                alert("Please enter a valid API Key to proceed.");
-                return;
+            try {
+                const input = document.getElementById('apiKeyInput');
+                const provSelect = document.getElementById('providerSelect');
+                const modelSelect = document.getElementById('modelSelect');
+                
+                const key = input ? input.value.trim() : "";
+                const prov = provSelect ? provSelect.value : "gemini";
+                const model = modelSelect ? modelSelect.value : "gemini-2.0-flash";
+                
+                if (!key && prov !== "ollama") {
+                    alert("Please enter a valid API Key to proceed.");
+                    return;
+                }
+
+                sessionApiKey = key;
+                sessionProvider = prov;
+                sessionModel = model;
+
+                sessionStorage.setItem("GOOGLE_API_KEY", key);
+                sessionStorage.setItem("session_provider", prov);
+                sessionStorage.setItem("session_model", model);
+
+                const keyModal = document.getElementById('keyModal');
+                if (keyModal) keyModal.style.display = "none";
+                
+                if (ws) {
+                    try { ws.close(); } catch(e) {}
+                    ws = null;
+                }
+                initConnection();
+            } catch (err) {
+                console.error("submitApiKey error:", err);
+                alert("Error starting session: " + err.message);
             }
-
-            sessionApiKey = key;
-            sessionProvider = prov;
-            sessionModel = model;
-
-            sessionStorage.setItem("GOOGLE_API_KEY", key);
-            sessionStorage.setItem("session_provider", prov);
-            sessionStorage.setItem("session_model", model);
-
-            keyModal.style.display = "none";
-            if (ws) {
-                ws.close();
-            }
-            initConnection();
         }
 
         function clearSessionKey() {
@@ -317,25 +315,41 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             sessionStorage.removeItem("session_provider");
             sessionStorage.removeItem("session_model");
             sessionApiKey = "";
-            document.getElementById('apiKeyInput').value = "";
-            keyModal.style.display = "flex";
+            const keyInput = document.getElementById('apiKeyInput');
+            if (keyInput) keyInput.value = "";
+            const provSelect = document.getElementById('providerSelect');
+            if (provSelect) provSelect.value = "gemini";
+            sessionProvider = "gemini";
+            sessionModel = "gemini-2.0-flash";
+            updateModelOptions();
+            const keyModal = document.getElementById('keyModal');
+            if (keyModal) keyModal.style.display = "flex";
             if (ws) {
-                ws.close();
+                try { ws.close(); } catch(e) {}
+                ws = null;
             }
-            statusSpan.innerText = "Disconnected";
-            statusSpan.style.background = "#334155";
+            const statusSpan = getStatusSpan();
+            if (statusSpan) {
+                statusSpan.innerText = "Disconnected";
+                statusSpan.style.background = "#334155";
+            }
         }
 
         function initConnection() {
-            telemetryDiv.innerHTML = "";
+            const telemetryDiv = getTelemetryDiv();
+            if (telemetryDiv) telemetryDiv.innerHTML = "";
+
             const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
             try {
                 const currentWs = new WebSocket(`${wsProtocol}//${location.host}/ws`);
                 ws = currentWs;
 
                 currentWs.onopen = () => {
-                    statusSpan.innerText = "Connecting Engine (WS)...";
-                    statusSpan.style.background = "#f59e0b";
+                    const statusSpan = getStatusSpan();
+                    if (statusSpan) {
+                        statusSpan.innerText = "Connecting Engine (WS)...";
+                        statusSpan.style.background = "#f59e0b";
+                    }
                     
                     currentWs.send(JSON.stringify({
                         type: "init",
@@ -366,15 +380,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         function enableSseMode(reason) {
             useSse = true;
-            statusSpan.innerText = `Online (${sessionProvider}: ${sessionModel}) [SSE Mode]`;
-            statusSpan.style.background = "#0284c7";
+            const statusSpan = getStatusSpan();
+            if (statusSpan) {
+                statusSpan.innerText = `Online (${sessionProvider}: ${sessionModel}) [SSE Mode]`;
+                statusSpan.style.background = "#0284c7";
+            }
             appendTelemetry(`ℹ ${reason}`);
         }
 
         function handleAgentEvent(data) {
+            const statusSpan = getStatusSpan();
             if (data.type === "init_success") {
-                statusSpan.innerText = `Online (${data.provider}: ${data.model}) [WS]`;
-                statusSpan.style.background = "#065f46";
+                if (statusSpan) {
+                    statusSpan.innerText = `Online (${data.provider}: ${data.model}) [WS]`;
+                    statusSpan.style.background = "#065f46";
+                }
                 useSse = false;
                 appendTelemetry(`Agent initialized with provider: ${data.provider}, model: ${data.model}`);
             } else if (data.type === "step_start") {
@@ -388,18 +408,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             } else if (data.type === "final_response") {
                 appendTelemetry("✔ Response complete.");
             } else if (data.type === "error") {
-                statusSpan.innerText = "Error";
-                statusSpan.style.background = "#991b1b";
+                if (statusSpan) {
+                    statusSpan.innerText = "Error";
+                    statusSpan.style.background = "#991b1b";
+                }
                 appendMessage("assistant", `❌ Error: ${data.error}`);
             }
         }
 
         async function sendMessage() {
             const input = document.getElementById('userInput');
-            const msg = input.value.trim();
+            const msg = input ? input.value.trim() : "";
             if (!msg) return;
 
-            input.value = "";
+            if (input) input.value = "";
 
             if (ws && ws.readyState === WebSocket.OPEN && !useSse) {
                 appendMessage("user", msg);
@@ -409,63 +431,51 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
-        async function sendViaSse(userMsg) {
+        function sendViaSse(userMsg) {
             appendMessage("user", userMsg);
-            statusSpan.innerText = "Processing (SSE)...";
-            statusSpan.style.background = "#3b82f6";
+            const statusSpan = getStatusSpan();
+            if (statusSpan) {
+                statusSpan.innerText = "Processing (SSE)...";
+                statusSpan.style.background = "#3b82f6";
+            }
 
-            try {
-                const response = await fetch('/api/stream', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        user_input: userMsg,
-                        api_key: sessionApiKey,
-                        provider: sessionProvider,
-                        model: sessionModel
-                    })
-                });
+            const query = new URLSearchParams({
+                user_input: userMsg,
+                api_key: sessionApiKey,
+                provider: sessionProvider,
+                model: sessionModel
+            });
 
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-
-                    const lines = buffer.split('\n\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (line.startsWith('data: ')) {
-                            const dataJson = line.replace('data: ', '').trim();
-                            if (!dataJson) continue;
-                            try {
-                                const data = JSON.parse(dataJson);
-                                handleAgentEvent(data);
-                            } catch (e) {
-                                console.error("Parse error in SSE frame:", e);
-                            }
+            const es = new EventSource(`/api/stream?${query}`);
+            es.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleAgentEvent(data);
+                    if (data.type === "final_response" || data.type === "error") {
+                        es.close();
+                        if (statusSpan) {
+                            statusSpan.innerText = `Online (${sessionProvider}: ${sessionModel}) [SSE Mode]`;
+                            statusSpan.style.background = "#0284c7";
                         }
                     }
+                } catch (e) {
+                    console.error("SSE parse error:", e);
                 }
-                statusSpan.innerText = `Online (${sessionProvider}: ${sessionModel}) [SSE Mode]`;
-                statusSpan.style.background = "#0284c7";
-            } catch (err) {
-                statusSpan.innerText = "Error (SSE)";
-                statusSpan.style.background = "#991b1b";
-                appendMessage("assistant", `❌ Stream Error: ${err.message}`);
-            }
+            };
+
+            es.onerror = () => {
+                es.close();
+                if (statusSpan) {
+                    statusSpan.innerText = "Error (SSE)";
+                    statusSpan.style.background = "#991b1b";
+                }
+            };
         }
 
         function appendMessage(role, text) {
             if (!text) return;
+            const messagesDiv = getMessagesDiv();
+            if (!messagesDiv) return;
             const div = document.createElement('div');
             div.className = `msg ${role}`;
             div.innerText = text;
@@ -474,6 +484,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         function appendTelemetry(text) {
+            const telemetryDiv = getTelemetryDiv();
+            if (!telemetryDiv) return;
             const div = document.createElement('div');
             div.style.fontSize = "12px";
             div.style.color = "#94a3b8";
@@ -481,6 +493,71 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             div.innerText = text;
             telemetryDiv.appendChild(div);
             telemetryDiv.scrollTop = telemetryDiv.scrollHeight;
+        }
+
+        function attachEventListeners() {
+            const startBtn = document.getElementById('startSessionBtn');
+            if (startBtn) {
+                startBtn.onclick = submitApiKey;
+                startBtn.addEventListener('click', submitApiKey);
+            }
+            const changeBtn = document.getElementById('changeKeyBtn');
+            if (changeBtn) {
+                changeBtn.onclick = clearSessionKey;
+                changeBtn.addEventListener('click', clearSessionKey);
+            }
+            const sendBtn = document.getElementById('sendMsgBtn');
+            if (sendBtn) {
+                sendBtn.onclick = sendMessage;
+                sendBtn.addEventListener('click', sendMessage);
+            }
+            const provSelect = document.getElementById('providerSelect');
+            if (provSelect) {
+                provSelect.onchange = updateModelOptions;
+                provSelect.addEventListener('change', updateModelOptions);
+            }
+            const userInput = document.getElementById('userInput');
+            if (userInput) {
+                userInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') sendMessage();
+                });
+            }
+        }
+
+        function initPage() {
+            attachEventListeners();
+            const provSelect = document.getElementById('providerSelect');
+            if (provSelect) {
+                provSelect.value = sessionProvider;
+            }
+            updateModelOptions();
+
+            const keyModal = document.getElementById('keyModal');
+            if (sessionApiKey || sessionProvider === "ollama") {
+                const keyInput = document.getElementById('apiKeyInput');
+                if (keyInput) keyInput.value = sessionApiKey;
+                if (keyModal) keyModal.style.display = "none";
+                initConnection();
+            } else {
+                if (keyModal) keyModal.style.display = "flex";
+            }
+        }
+
+        // Expose handlers globally on window scope
+        window.updateModelOptions = updateModelOptions;
+        window.submitApiKey = submitApiKey;
+        window.clearSessionKey = clearSessionKey;
+        window.sendMessage = sendMessage;
+
+        // Initialize page state safely
+        try {
+            if (document.readyState === "loading") {
+                document.addEventListener("DOMContentLoaded", initPage);
+            } else {
+                initPage();
+            }
+        } catch (err) {
+            console.error("Initialization error:", err);
         }
     </script>
 </body>
@@ -491,8 +568,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 async def get_dashboard():
     return HTMLResponse(content=HTML_TEMPLATE)
 
-@app.post("/api/stream")
-async def stream_agent_execution(payload: StreamRequest):
+@app.get("/.well-known/appspecific/com.chrome.devtools.json")
+async def chrome_devtools_wellknown():
+    return {}
+
+@app.api_route("/api/stream", methods=["GET", "POST"])
+async def stream_agent_execution(
+    user_input: Optional[str] = None,
+    api_key: Optional[str] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    payload: Optional[StreamRequest] = None
+):
+    inp = (payload.user_input if payload else user_input) or ""
+    key = (payload.api_key if payload else api_key) or ""
+    prov = (payload.provider if payload else provider) or "gemini"
+    mdl = (payload.model if payload else model) or "gemini-2.0-flash"
+
     event_queue = asyncio.Queue()
 
     def sse_callback(event: dict):
@@ -501,15 +593,15 @@ async def stream_agent_execution(payload: StreamRequest):
     async def event_generator():
         try:
             config = set_session_api_key(
-                api_key=payload.api_key or "",
-                provider=payload.provider,
-                model=payload.model
+                api_key=key,
+                provider=prov,
+                model=mdl
             )
             engine = AgentEngine(config=config)
             
-            yield f"data: {json.dumps({'type': 'init_success', 'provider': payload.provider, 'model': payload.model})}\n\n"
+            yield f"data: {json.dumps({'type': 'init_success', 'provider': prov, 'model': mdl})}\n\n"
             
-            task = asyncio.create_task(engine.run_step(payload.user_input, step_callback=sse_callback))
+            task = asyncio.create_task(engine.run_step(inp, step_callback=sse_callback))
             
             while not task.done() or not event_queue.empty():
                 try:
