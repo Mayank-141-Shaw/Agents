@@ -2,10 +2,17 @@ import json
 import uvicorn
 import asyncio
 from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from agent.config import get_config, set_session_api_key, AgentConfig
 from agent.core.engine import AgentEngine
+
+class StreamRequest(BaseModel):
+    user_input: str
+    api_key: Optional[str] = None
+    provider: str = "gemini"
+    model: str = "gemini-2.0-flash"
 
 app = FastAPI(title="Local Coding Agent Dashboard", version="0.1.0")
 
@@ -227,6 +234,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         };
 
         let ws = null;
+        let useSse = false;
         let sessionApiKey = sessionStorage.getItem("GOOGLE_API_KEY") || "";
         let sessionProvider = sessionStorage.getItem("session_provider") || "gemini";
         let sessionModel = sessionStorage.getItem("session_model") || "gemini-2.0-flash";
@@ -238,13 +246,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         window.addEventListener("DOMContentLoaded", () => {
             updateModelOptions();
-            if (sessionApiKey) {
+            if (sessionApiKey || sessionProvider === "ollama") {
                 document.getElementById('apiKeyInput').value = sessionApiKey;
                 document.getElementById('providerSelect').value = sessionProvider;
                 updateModelOptions();
                 document.getElementById('modelSelect').value = sessionModel;
                 keyModal.style.display = "none";
-                initWebSocket();
+                initConnection();
             } else {
                 keyModal.style.display = "flex";
             }
@@ -291,7 +299,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (ws) {
                 ws.close();
             }
-            initWebSocket();
+            initConnection();
         }
 
         function clearSessionKey() {
@@ -308,72 +316,142 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             statusSpan.style.background = "#334155";
         }
 
-        function initWebSocket() {
-            if (ws) {
-                ws.onopen = null;
-                ws.onmessage = null;
-                ws.onclose = null;
-                ws.close();
-                ws = null;
-            }
-
+        function initConnection() {
             telemetryDiv.innerHTML = "";
-            const currentWs = new WebSocket(`ws://${location.host}/ws`);
-            ws = currentWs;
+            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            try {
+                const currentWs = new WebSocket(`${wsProtocol}//${location.host}/ws`);
+                ws = currentWs;
 
-            currentWs.onopen = () => {
-                statusSpan.innerText = "Connecting Engine...";
-                statusSpan.style.background = "#f59e0b";
-                
-                currentWs.send(JSON.stringify({
-                    type: "init",
-                    api_key: sessionApiKey,
-                    provider: sessionProvider,
-                    model: sessionModel
-                }));
-            };
+                currentWs.onopen = () => {
+                    statusSpan.innerText = "Connecting Engine (WS)...";
+                    statusSpan.style.background = "#f59e0b";
+                    
+                    currentWs.send(JSON.stringify({
+                        type: "init",
+                        api_key: sessionApiKey,
+                        provider: sessionProvider,
+                        model: sessionModel
+                    }));
+                };
 
-            currentWs.onclose = () => {
-                statusSpan.innerText = "Disconnected";
-                statusSpan.style.background = "#991b1b";
-            };
+                currentWs.onerror = () => {
+                    enableSseMode("WebSocket connection unavailable. Enabled HTTP SSE streaming.");
+                };
 
-            currentWs.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                if (data.type === "init_success") {
-                    statusSpan.innerText = `Online (${data.provider}: ${data.model})`;
-                    statusSpan.style.background = "#065f46";
-                    telemetryDiv.innerHTML = `<div style="font-size: 12px; color: #94a3b8; margin-bottom: 5px;">Agent initialized with provider: ${data.provider}, model: ${data.model}</div>`;
-                } else if (data.type === "step_start") {
-                    appendTelemetry(`━━ Step ${data.step}/${data.max_steps} ━━`);
-                } else if (data.type === "assistant_thinking") {
-                    appendMessage("assistant", data.content);
-                } else if (data.type === "tool_executing") {
-                    appendTelemetry(`⚙ Tool Call: ${data.tool_name}`);
-                } else if (data.type === "tool_completed") {
-                    appendMessage("tool", `[${data.tool_name}] ${data.output}`);
-                } else if (data.type === "final_response") {
-                    appendTelemetry("✔ Response complete.");
-                } else if (data.type === "error") {
-                    statusSpan.innerText = "Init Failed";
-                    statusSpan.style.background = "#991b1b";
-                    appendMessage("assistant", `❌ Error: ${data.error}`);
-                    alert(`Agent Initialization Error: ${data.error}`);
-                }
-            };
+                currentWs.onclose = () => {
+                    if (!useSse) {
+                        enableSseMode("Disconnected from WebSocket. Switched to HTTP SSE mode.");
+                    }
+                };
+
+                currentWs.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    handleAgentEvent(data);
+                };
+            } catch (err) {
+                enableSseMode("WebSocket not supported. Enabled HTTP SSE streaming.");
+            }
         }
 
-        function sendMessage() {
+        function enableSseMode(reason) {
+            useSse = true;
+            statusSpan.innerText = `Online (${sessionProvider}: ${sessionModel}) [SSE Mode]`;
+            statusSpan.style.background = "#0284c7";
+            appendTelemetry(`ℹ ${reason}`);
+        }
+
+        function handleAgentEvent(data) {
+            if (data.type === "init_success") {
+                statusSpan.innerText = `Online (${data.provider}: ${data.model}) [WS]`;
+                statusSpan.style.background = "#065f46";
+                useSse = false;
+                appendTelemetry(`Agent initialized with provider: ${data.provider}, model: ${data.model}`);
+            } else if (data.type === "step_start") {
+                appendTelemetry(`━━ Step ${data.step}/${data.max_steps} ━━`);
+            } else if (data.type === "assistant_thinking") {
+                appendMessage("assistant", data.content);
+            } else if (data.type === "tool_executing") {
+                appendTelemetry(`⚙ Tool Call: ${data.tool_name}`);
+            } else if (data.type === "tool_completed") {
+                appendMessage("tool", `[${data.tool_name}] ${data.output}`);
+            } else if (data.type === "final_response") {
+                appendTelemetry("✔ Response complete.");
+            } else if (data.type === "error") {
+                statusSpan.innerText = "Error";
+                statusSpan.style.background = "#991b1b";
+                appendMessage("assistant", `❌ Error: ${data.error}`);
+            }
+        }
+
+        async function sendMessage() {
             const input = document.getElementById('userInput');
             const msg = input.value.trim();
             if (!msg) return;
-            if (!ws || ws.readyState !== WebSocket.OPEN) {
-                alert("WebSocket is not connected. Please enter your API key and start session.");
-                return;
-            }
-            appendMessage("user", msg);
-            ws.send(JSON.stringify({ type: "user_message", content: msg }));
+
             input.value = "";
+
+            if (ws && ws.readyState === WebSocket.OPEN && !useSse) {
+                appendMessage("user", msg);
+                ws.send(JSON.stringify({ type: "user_message", content: msg }));
+            } else {
+                await sendViaSse(msg);
+            }
+        }
+
+        async function sendViaSse(userMsg) {
+            appendMessage("user", userMsg);
+            statusSpan.innerText = "Processing (SSE)...";
+            statusSpan.style.background = "#3b82f6";
+
+            try {
+                const response = await fetch('/api/stream', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_input: userMsg,
+                        api_key: sessionApiKey,
+                        provider: sessionProvider,
+                        model: sessionModel
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+
+                    const lines = buffer.split('\n\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const dataJson = line.replace('data: ', '').trim();
+                            if (!dataJson) continue;
+                            try {
+                                const data = JSON.parse(dataJson);
+                                handleAgentEvent(data);
+                            } catch (e) {
+                                console.error("Parse error in SSE frame:", e);
+                            }
+                        }
+                    }
+                }
+                statusSpan.innerText = `Online (${sessionProvider}: ${sessionModel}) [SSE Mode]`;
+                statusSpan.style.background = "#0284c7";
+            } catch (err) {
+                statusSpan.innerText = "Error (SSE)";
+                statusSpan.style.background = "#991b1b";
+                appendMessage("assistant", `❌ Stream Error: ${err.message}`);
+            }
         }
 
         function appendMessage(role, text) {
@@ -402,6 +480,40 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 @app.get("/")
 async def get_dashboard():
     return HTMLResponse(content=HTML_TEMPLATE)
+
+@app.post("/api/stream")
+async def stream_agent_execution(payload: StreamRequest):
+    event_queue = asyncio.Queue()
+
+    def sse_callback(event: dict):
+        event_queue.put_nowait(event)
+
+    async def event_generator():
+        try:
+            config = set_session_api_key(
+                api_key=payload.api_key or "",
+                provider=payload.provider,
+                model=payload.model
+            )
+            engine = AgentEngine(config=config)
+            
+            yield f"data: {json.dumps({'type': 'init_success', 'provider': payload.provider, 'model': payload.model})}\n\n"
+            
+            task = asyncio.create_task(engine.run_step(payload.user_input, step_callback=sse_callback))
+            
+            while not task.done() or not event_queue.empty():
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=0.1)
+                    yield f"data: {json.dumps(event)}\n\n"
+                except asyncio.TimeoutError:
+                    await asyncio.sleep(0.01)
+            
+            final_answer = await task
+            yield f"data: {json.dumps({'type': 'final_response', 'content': final_answer})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

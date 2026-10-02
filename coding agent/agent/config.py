@@ -4,12 +4,26 @@ from typing import Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+def get_default_workspace() -> Path:
+    if os.getenv("VERCEL") == "1":
+        ws = Path("/tmp/workspace")
+        ws.mkdir(parents=True, exist_ok=True)
+        return ws
+    return Path.cwd()
+
+def get_default_logs_dir() -> Path:
+    if os.getenv("VERCEL") == "1":
+        ld = Path("/tmp/agent_logs")
+        ld.mkdir(parents=True, exist_ok=True)
+        return ld
+    return Path.cwd() / ".agent_logs"
+
 class AgentConfig(BaseSettings):
     """Configuration settings for the Local Coding Agent."""
     
     # Workspace & Directory Settings
-    workspace_dir: Path = Field(default_factory=lambda: Path.cwd(), description="Root directory for workspace operations")
-    logs_dir: Path = Field(default_factory=lambda: Path.cwd() / ".agent_logs", description="Directory for session transcripts and logs")
+    workspace_dir: Path = Field(default_factory=get_default_workspace, description="Root directory for workspace operations")
+    logs_dir: Path = Field(default_factory=get_default_logs_dir, description="Directory for session transcripts and logs")
     
     # Provider & Model Settings
     provider: str = Field(default="gemini", description="Default provider: gemini, ollama, openai, anthropic")
