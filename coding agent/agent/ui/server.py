@@ -245,12 +245,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         const keyModal = document.getElementById('keyModal');
 
         window.addEventListener("DOMContentLoaded", () => {
+            const provSelect = document.getElementById('providerSelect');
+            if (provSelect) {
+                provSelect.value = sessionProvider;
+            }
             updateModelOptions();
+
             if (sessionApiKey || sessionProvider === "ollama") {
                 document.getElementById('apiKeyInput').value = sessionApiKey;
-                document.getElementById('providerSelect').value = sessionProvider;
-                updateModelOptions();
-                document.getElementById('modelSelect').value = sessionModel;
                 keyModal.style.display = "none";
                 initConnection();
             } else {
@@ -261,7 +263,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function updateModelOptions() {
             const provSelect = document.getElementById('providerSelect');
             const modelSelect = document.getElementById('modelSelect');
-            const prov = provSelect.value;
+            if (!provSelect || !modelSelect) return;
+
+            const prov = provSelect.value || sessionProvider || "gemini";
             const models = MODEL_MAP[prov] || [];
 
             modelSelect.innerHTML = "";
@@ -269,8 +273,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const opt = document.createElement('option');
                 opt.value = m.id;
                 opt.innerText = m.name;
+                if (m.id === sessionModel) {
+                    opt.selected = true;
+                }
                 modelSelect.appendChild(opt);
             });
+            if (modelSelect.options.length > 0 && !modelSelect.value) {
+                modelSelect.selectedIndex = 0;
+            }
         }
 
         function submitApiKey() {
